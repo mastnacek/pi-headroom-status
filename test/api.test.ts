@@ -137,7 +137,7 @@ describe("api metrics extraction", () => {
       tokensSaved: 10000,
       tokensBefore: 40000,
       tokensAfter: 30000,
-      costSavedUsd: 0.10,
+      costSavedUsd: 0.1,
       totalRequests: 20,
     };
 
@@ -164,7 +164,11 @@ describe("api metrics extraction", () => {
       costSavedUsd: 0.03,
     });
 
-    const session = calculateSessionMetrics(resetMetrics, baseline, mockDiskEventsSince);
+    const session = calculateSessionMetrics(
+      resetMetrics,
+      baseline,
+      mockDiskEventsSince,
+    );
     assert.equal(session.totalRequests, 3);
     assert.equal(session.tokensSaved, 2500);
     assert.equal(session.tokensBefore, 7000);

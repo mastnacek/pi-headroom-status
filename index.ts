@@ -165,18 +165,21 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
         }),
       ),
       scope: Type.Optional(
-        Type.Union([
-          Type.Literal("session"),
-          Type.Literal("lifetime"),
-          Type.Literal("both"),
-        ], {
-          description: "Scope of metrics to return: session | lifetime | both (default: both)",
-        }),
+        Type.Union(
+          [
+            Type.Literal("session"),
+            Type.Literal("lifetime"),
+            Type.Literal("both"),
+          ],
+          {
+            description:
+              "Scope of metrics to return: session | lifetime | both (default: both)",
+          },
+        ),
       ),
       detailed: Type.Optional(
         Type.Boolean({
-          description:
-            "Return full markdown breakdown instead of summary text",
+          description: "Return full markdown breakdown instead of summary text",
         }),
       ),
     }),
@@ -189,9 +192,10 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
       }
 
       if (params.detailed) {
-        const text = params.scope === "session"
-          ? formatSessionReport(metrics, config)
-          : formatDetailedReport(metrics, config);
+        const text =
+          params.scope === "session"
+            ? formatSessionReport(metrics, config)
+            : formatDetailedReport(metrics, config);
         return {
           content: [
             {

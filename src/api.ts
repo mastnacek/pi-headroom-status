@@ -210,8 +210,7 @@ export function calculateSessionMetrics(
     after = Math.max(0, before - saved);
   }
 
-  const pct =
-    before > 0 ? Math.round((saved / before) * 1000) / 10 : 0;
+  const pct = before > 0 ? Math.round((saved / before) * 1000) / 10 : 0;
 
   return {
     startedAt: baseline.startedAt,

@@ -95,7 +95,9 @@ export function registerHeadroomCommands(
   pi: ExtensionAPI,
   getState: () => { config: HeadroomStatusConfig; metrics: HeadroomMetrics },
   updateState: (config: HeadroomStatusConfig, metrics: HeadroomMetrics) => void,
-  computeSession?: (lifetime: HeadroomMetrics) => HeadroomSessionMetrics | undefined,
+  computeSession?: (
+    lifetime: HeadroomMetrics,
+  ) => HeadroomSessionMetrics | undefined,
   resetSession?: (lifetime: HeadroomMetrics) => void,
 ): void {
   const getCompletions = async (
@@ -153,9 +155,16 @@ export function registerHeadroomCommands(
       }
 
       if (
-        ["on", "off", "refresh", "dashboard", "status", "savings", "session", "reset-session"].includes(
-          cmd || "",
-        )
+        [
+          "on",
+          "off",
+          "refresh",
+          "dashboard",
+          "status",
+          "savings",
+          "session",
+          "reset-session",
+        ].includes(cmd || "")
       ) {
         const flags = [
           {
@@ -225,7 +234,10 @@ export function registerHeadroomCommands(
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
-        ctx.ui.notify("⚡ Headroom session baseline reset to current moment.", "info");
+        ctx.ui.notify(
+          "⚡ Headroom session baseline reset to current moment.",
+          "info",
+        );
         break;
       }
 
@@ -254,12 +266,14 @@ export function registerHeadroomCommands(
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
-        const activePct = config.scope === "session" && metrics.session
-          ? metrics.session.savingsPct
-          : metrics.savingsPct;
-        const activeTokens = config.scope === "session" && metrics.session
-          ? metrics.session.tokensSaved
-          : metrics.tokensSaved;
+        const activePct =
+          config.scope === "session" && metrics.session
+            ? metrics.session.savingsPct
+            : metrics.savingsPct;
+        const activeTokens =
+          config.scope === "session" && metrics.session
+            ? metrics.session.tokensSaved
+            : metrics.tokensSaved;
         ctx.ui.notify(
           `⚡ Headroom stats refreshed: ${activePct.toFixed(1)}% savings (${activeTokens.toLocaleString()} tokens saved)`,
           "info",

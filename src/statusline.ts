@@ -72,20 +72,19 @@ export function formatStatusline(
 
   const isSessionScope = config.scope === "session" && metrics.session;
   const activeSaved = isSessionScope
-    ? metrics.session?.tokensSaved ?? 0
+    ? (metrics.session?.tokensSaved ?? 0)
     : metrics.tokensSaved;
   const activePct = isSessionScope
-    ? metrics.session?.savingsPct ?? 0
+    ? (metrics.session?.savingsPct ?? 0)
     : metrics.savingsPct;
   const activeCost = isSessionScope
-    ? metrics.session?.costSavedUsd ?? 0
+    ? (metrics.session?.costSavedUsd ?? 0)
     : metrics.costSavedUsd;
   const activeReqs = isSessionScope
-    ? metrics.session?.totalRequests ?? 0
+    ? (metrics.session?.totalRequests ?? 0)
     : metrics.totalRequests;
 
-  const pctStr =
-    activePct > 0 ? `${activePct.toFixed(1)}%` : "0.0%";
+  const pctStr = activePct > 0 ? `${activePct.toFixed(1)}%` : "0.0%";
   const pctColored = `${ANSI_BOLD}${ANSI_GREEN}${pctStr}${ANSI_RESET}`;
 
   const parts: string[] = [];
@@ -106,8 +105,7 @@ export function formatStatusline(
   if (config.format === "detailed") {
     const versionStr = metrics.version ? ` v${metrics.version}` : "";
     const scopeStr = isSessionScope ? " (session)" : "";
-    const reqStr =
-      activeReqs > 0 ? ` · ${activeReqs} reqs` : "";
+    const reqStr = activeReqs > 0 ? ` · ${activeReqs} reqs` : "";
     return `${ANSI_BOLD}${ANSI_CYAN}${prefix}Headroom${versionStr}${scopeStr}:${ANSI_RESET} ${pctColored}${details}${ANSI_DIM}${reqStr}${ANSI_RESET}`;
   }
 
