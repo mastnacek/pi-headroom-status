@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { exec } from "node:child_process";
-import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
+import { saveConfig } from "./config.js";
 import { getHeadroomMetrics } from "./api.js";
 import {
   formatDetailedReport,
@@ -13,7 +13,6 @@ import {
   ANSI_CYAN,
   ANSI_GREEN,
   ANSI_DIM,
-  ANSI_YELLOW,
   ANSI_RESET,
 } from "./statusline.js";
 import type { HeadroomMetrics, HeadroomStatusConfig } from "./types.js";
@@ -66,18 +65,14 @@ export function buildHelpText(
 
 export function openDashboard(host: string, port: number): void {
   const url = `http://${host}:${port}/dashboard`;
-  const startCmd =
-    process.platform === "win32"
-      ? `start "" "${url}"`
-      : process.platform === "darwin"
-      ? `open "${url}"`
-      : `xdg-open "${url}"`;
+  let startCmd = `xdg-open "${url}"`;
+  if (process.platform === "win32") {
+    startCmd = `start "" "${url}"`;
+  } else if (process.platform === "darwin") {
+    startCmd = `open "${url}"`;
+  }
 
-  exec(startCmd, (err) => {
-    if (err) {
-      console.error("[pi-headroom-status] Failed to launch browser:", err);
-    }
-  });
+  exec(startCmd);
 }
 
 export function registerHeadroomCommands(
@@ -123,9 +118,12 @@ export function registerHeadroomCommands(
 
     // 1st Token Completion (Subcommands from Dictionary)
     const typed = (tokens[0] ?? "").toLowerCase();
-    const items = Object.entries(COMMAND_DOCS)
-      .filter(([key]) => key.toLowerCase().startsWith(typed))
-      .map(([value, description]) => ({ value, label: value, description }));
+    const items: AutocompleteItem[] = [];
+    for (const [value, description] of Object.entries(COMMAND_DOCS)) {
+      if (value.toLowerCase().startsWith(typed)) {
+        items.push({ value, label: value, description });
+      }
+    }
 
     return items.length > 0 ? items : null;
   };
@@ -205,12 +203,7 @@ export function registerHeadroomCommands(
       }
 
       case "format": {
-        const validFormats: Array<HeadroomStatusConfig["format"]> = [
-          "compact",
-          "normal",
-          "detailed",
-        ];
-        if (!validFormats.includes(value as any)) {
+        if (value !== "compact" && value !== "normal" && value !== "detailed") {
           ctx.ui.notify(
             `Invalid format "${value}". Choose: compact | normal | detailed`,
             "warning"
@@ -219,7 +212,7 @@ export function registerHeadroomCommands(
         }
         config = saveConfig(
           ctx.cwd,
-          { format: value as HeadroomStatusConfig["format"] },
+          { format: value },
           isGlobal
         );
         updateState(config, metrics);
@@ -232,7 +225,7 @@ export function registerHeadroomCommands(
 
       case "port": {
         const portNum = parseInt(value, 10);
-        if (isNaN(portNum) || portNum <= 0 || portNum > 65535) {
+        if (Number.isNaN(portNum) || portNum <= 0 || portNum > 65535) {
           ctx.ui.notify(`Invalid port "${value}". Must be a number between 1 and 65535.`, "warning");
           return;
         }
