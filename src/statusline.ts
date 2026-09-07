@@ -57,7 +57,7 @@ export function formatUptime(seconds?: number): string {
  */
 export function formatStatusline(
   metrics: HeadroomMetrics,
-  config: HeadroomStatusConfig
+  config: HeadroomStatusConfig,
 ): string {
   if (!config.enabled) {
     return "";
@@ -70,18 +70,34 @@ export function formatStatusline(
     return `${ANSI_DIM}${ANSI_RED}${prefix}Headroom: offline${ANSI_RESET}`;
   }
 
-  const pct = metrics.savingsPct > 0 ? `${metrics.savingsPct.toFixed(1)}%` : "0.0%";
-  const pctColored = `${ANSI_BOLD}${ANSI_GREEN}${pct}${ANSI_RESET}`;
+  const isSessionScope = config.scope === "session" && metrics.session;
+  const activeSaved = isSessionScope
+    ? metrics.session?.tokensSaved ?? 0
+    : metrics.tokensSaved;
+  const activePct = isSessionScope
+    ? metrics.session?.savingsPct ?? 0
+    : metrics.savingsPct;
+  const activeCost = isSessionScope
+    ? metrics.session?.costSavedUsd ?? 0
+    : metrics.costSavedUsd;
+  const activeReqs = isSessionScope
+    ? metrics.session?.totalRequests ?? 0
+    : metrics.totalRequests;
+
+  const pctStr =
+    activePct > 0 ? `${activePct.toFixed(1)}%` : "0.0%";
+  const pctColored = `${ANSI_BOLD}${ANSI_GREEN}${pctStr}${ANSI_RESET}`;
 
   const parts: string[] = [];
-  if (config.showTokens && metrics.tokensSaved > 0) {
-    parts.push(`-${formatTokens(metrics.tokensSaved)}`);
+  if (config.showTokens && activeSaved > 0) {
+    parts.push(`-${formatTokens(activeSaved)}`);
   }
-  if (config.showDollars && metrics.costSavedUsd > 0) {
-    parts.push(formatCost(metrics.costSavedUsd));
+  if (config.showDollars && activeCost > 0) {
+    parts.push(formatCost(activeCost));
   }
 
-  const details = parts.length > 0 ? ` ${ANSI_DIM}(${parts.join(" · ")})${ANSI_RESET}` : "";
+  const details =
+    parts.length > 0 ? ` ${ANSI_DIM}(${parts.join(" · ")})${ANSI_RESET}` : "";
 
   if (config.format === "compact") {
     return `${ANSI_BOLD}${ANSI_CYAN}${prefix}${pctColored}${details}`;
@@ -89,8 +105,10 @@ export function formatStatusline(
 
   if (config.format === "detailed") {
     const versionStr = metrics.version ? ` v${metrics.version}` : "";
-    const reqStr = metrics.totalRequests > 0 ? ` · ${metrics.totalRequests} reqs` : "";
-    return `${ANSI_BOLD}${ANSI_CYAN}${prefix}Headroom${versionStr}:${ANSI_RESET} ${pctColored}${details}${ANSI_DIM}${reqStr}${ANSI_RESET}`;
+    const scopeStr = isSessionScope ? " (session)" : "";
+    const reqStr =
+      activeReqs > 0 ? ` · ${activeReqs} reqs` : "";
+    return `${ANSI_BOLD}${ANSI_CYAN}${prefix}Headroom${versionStr}${scopeStr}:${ANSI_RESET} ${pctColored}${details}${ANSI_DIM}${reqStr}${ANSI_RESET}`;
   }
 
   // Normal format (default)
@@ -98,11 +116,52 @@ export function formatStatusline(
 }
 
 /**
+ * Generates structured markdown report for /headroom session.
+ */
+export function formatSessionReport(
+  metrics: HeadroomMetrics,
+  config: HeadroomStatusConfig,
+): string {
+  const statusIcon = metrics.online ? "🟢 Active" : "🔴 Offline";
+  const session = metrics.session;
+
+  const startTimeStr = session?.startedAtIso
+    ? new Date(session.startedAtIso).toLocaleString()
+    : "current session";
+
+  const lines: string[] = [
+    `# ⚡ Headroom Session Savings`,
+    ``,
+    `* **Session Started:** ${startTimeStr}`,
+    `* **Proxy Status:** ${statusIcon} (http://${config.host}:${config.port})`,
+  ];
+
+  if (metrics.activeModel) {
+    lines.push(`* **Active Model:** \`${metrics.activeModel}\``);
+  }
+
+  lines.push(
+    ``,
+    `### 🎯 Current Session Reduction`,
+    `* **Compression Ratio:** **${(session?.savingsPct ?? 0).toFixed(1)}%**`,
+    `* **Tokens Saved:** **${formatNumber(session?.tokensSaved ?? 0)}** tokens`,
+    `* **Original Input:** ${formatNumber(session?.tokensBefore ?? 0)} tokens`,
+    `* **Optimized Input:** ${formatNumber(session?.tokensAfter ?? 0)} tokens`,
+    `* **Cost Avoided:** **${formatCost(session?.costSavedUsd ?? 0)}**`,
+    `* **Session Requests:** ${formatNumber(session?.totalRequests ?? 0)}`,
+    ``,
+    `*(Lifetime proxy savings: ${formatNumber(metrics.tokensSaved)} tokens · ${formatCost(metrics.costSavedUsd)} across ${formatNumber(metrics.totalRequests)} reqs)*`,
+  );
+
+  return lines.join("\n");
+}
+
+/**
  * Generates structured markdown report for /headroom status / savings.
  */
 export function formatDetailedReport(
   metrics: HeadroomMetrics,
-  config: HeadroomStatusConfig
+  config: HeadroomStatusConfig,
 ): string {
   const statusIcon = metrics.online ? "🟢 Active" : "🔴 Offline";
   const uptimeStr = formatUptime(metrics.uptimeSeconds);
@@ -114,22 +173,44 @@ export function formatDetailedReport(
     `* **Proxy Status:** ${statusIcon} (http://${config.host}:${config.port})`,
     `* **Version:** ${versionStr} | **Uptime:** ${uptimeStr}`,
     `* **Data Source:** ${metrics.source}`,
-    ``,
-    `### 📊 Savings & Token Reduction`,
-    `* **Compression Ratio:** **${metrics.savingsPct.toFixed(1)}%**`,
-    `* **Tokens Saved:** **${formatNumber(metrics.tokensSaved)}** tokens`,
-    `* **Original Input:** ${formatNumber(metrics.tokensBefore)} tokens`,
-    `* **Optimized Input:** ${formatNumber(metrics.tokensAfter)} tokens`,
-    `* **Estimated Cost Avoided:** **${formatCost(metrics.costSavedUsd)}**`,
   ];
+
+  if (metrics.session) {
+    const s = metrics.session;
+    lines.push(
+      ``,
+      `### 🎯 Current Session Savings`,
+      `* **Session Compression Ratio:** **${s.savingsPct.toFixed(1)}%**`,
+      `* **Session Tokens Saved:** **${formatNumber(s.tokensSaved)}** tokens`,
+      `* **Session Original Input:** ${formatNumber(s.tokensBefore)} tokens`,
+      `* **Session Optimized Input:** ${formatNumber(s.tokensAfter)} tokens`,
+      `* **Session Cost Avoided:** **${formatCost(s.costSavedUsd)}**`,
+      `* **Session Requests:** ${formatNumber(s.totalRequests)}`,
+    );
+  }
+
+  lines.push(
+    ``,
+    `### 🌐 Lifetime / Global Savings`,
+    `* **Lifetime Compression Ratio:** **${metrics.savingsPct.toFixed(1)}%**`,
+    `* **Lifetime Tokens Saved:** **${formatNumber(metrics.tokensSaved)}** tokens`,
+    `* **Lifetime Original Input:** ${formatNumber(metrics.tokensBefore)} tokens`,
+    `* **Lifetime Optimized Input:** ${formatNumber(metrics.tokensAfter)} tokens`,
+    `* **Estimated Cost Avoided:** **${formatCost(metrics.costSavedUsd)}**`,
+    `* **Total Requests:** ${formatNumber(metrics.totalRequests)}`,
+  );
 
   if (metrics.schemaTokensSaved > 0 || metrics.messageTokensSaved > 0) {
     lines.push(``, `### 🔍 Savings Breakdown`);
     if (metrics.schemaTokensSaved > 0) {
-      lines.push(`* **Tool Schemas Pruned:** ${formatNumber(metrics.schemaTokensSaved)} tokens`);
+      lines.push(
+        `* **Tool Schemas Pruned:** ${formatNumber(metrics.schemaTokensSaved)} tokens`,
+      );
     }
     if (metrics.messageTokensSaved > 0) {
-      lines.push(`* **Message Compaction:** ${formatNumber(metrics.messageTokensSaved)} tokens`);
+      lines.push(
+        `* **Message Compaction:** ${formatNumber(metrics.messageTokensSaved)} tokens`,
+      );
     }
   }
 

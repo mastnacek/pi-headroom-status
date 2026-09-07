@@ -5,10 +5,16 @@ import type {
   HeadroomHealthResponse,
   HeadroomMetrics,
   HeadroomSavingsEvent,
+  HeadroomSessionBaseline,
+  HeadroomSessionMetrics,
   HeadroomStatusConfig,
 } from "./types.js";
 
-const SAVINGS_EVENTS_PATH = join(homedir(), ".headroom", "savings_events.jsonl");
+const SAVINGS_EVENTS_PATH = join(
+  homedir(),
+  ".headroom",
+  "savings_events.jsonl",
+);
 
 interface RawCompressionStats {
   total_tokens_removed?: number;
@@ -53,7 +59,7 @@ interface RawHeadroomStats {
 /**
  * Parses events from ~/.headroom/savings_events.jsonl to calculate historical savings.
  */
-export function readSavingsEvents(): {
+export function readSavingsEvents(customPath = SAVINGS_EVENTS_PATH): {
   totalRequests: number;
   tokensSaved: number;
   tokensBefore: number;
@@ -70,12 +76,12 @@ export function readSavingsEvents(): {
     lastEvent: undefined as HeadroomSavingsEvent | undefined,
   };
 
-  if (!existsSync(SAVINGS_EVENTS_PATH)) {
+  if (!existsSync(customPath)) {
     return result;
   }
 
   try {
-    const content = readFileSync(SAVINGS_EVENTS_PATH, "utf8");
+    const content = readFileSync(customPath, "utf8");
     const lines = content.trim().split("\n").filter(Boolean);
 
     for (const line of lines) {
@@ -98,9 +104,130 @@ export function readSavingsEvents(): {
   return result;
 }
 
+/**
+ * Reads and aggregates savings events recorded since a given timestamp from savings_events.jsonl.
+ */
+export function readSavingsEventsSince(
+  since: string | number,
+  customPath = SAVINGS_EVENTS_PATH,
+): {
+  totalRequests: number;
+  tokensSaved: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  costSavedUsd: number;
+} {
+  const result = {
+    totalRequests: 0,
+    tokensSaved: 0,
+    tokensBefore: 0,
+    tokensAfter: 0,
+    costSavedUsd: 0,
+  };
+
+  if (!existsSync(customPath)) {
+    return result;
+  }
+
+  const sinceTime = new Date(since).getTime();
+
+  try {
+    const content = readFileSync(customPath, "utf8");
+    const lines = content.trim().split("\n").filter(Boolean);
+
+    for (const line of lines) {
+      try {
+        const ev = JSON.parse(line) as HeadroomSavingsEvent;
+        const evTime = ev.ts ? new Date(ev.ts).getTime() : 0;
+        if (evTime >= sinceTime) {
+          result.totalRequests++;
+          result.tokensSaved += ev.saved || 0;
+          result.tokensBefore += ev.before || 0;
+          result.tokensAfter += ev.after || 0;
+          result.costSavedUsd += ev.cost_usd || 0;
+        }
+      } catch {
+        // Skip malformed line
+      }
+    }
+  } catch {
+    // Non-fatal read error
+  }
+
+  return result;
+}
+
+/**
+ * Creates a baseline snapshot from metrics at session start or reset.
+ */
+export function createSessionBaseline(
+  metrics: HeadroomMetrics,
+  nowMs = Date.now(),
+): HeadroomSessionBaseline {
+  return {
+    startedAt: nowMs,
+    startedAtIso: new Date(nowMs).toISOString(),
+    tokensSaved: metrics.tokensSaved,
+    tokensBefore: metrics.tokensBefore,
+    tokensAfter: metrics.tokensAfter,
+    costSavedUsd: metrics.costSavedUsd,
+    totalRequests: metrics.totalRequests,
+  };
+}
+
+/**
+ * Computes session-scoped metrics by subtracting baseline from lifetime metrics,
+ * with automatic fallback to disk logs if proxy restarted.
+ */
+export function calculateSessionMetrics(
+  lifetime: HeadroomMetrics,
+  baseline: HeadroomSessionBaseline,
+  readEventsSinceFn: typeof readSavingsEventsSince = readSavingsEventsSince,
+): HeadroomSessionMetrics {
+  let saved = lifetime.tokensSaved - baseline.tokensSaved;
+  let before = lifetime.tokensBefore - baseline.tokensBefore;
+  let after = lifetime.tokensAfter - baseline.tokensAfter;
+  let cost = lifetime.costSavedUsd - baseline.costSavedUsd;
+  let reqs = lifetime.totalRequests - baseline.totalRequests;
+
+  // Fallback to savings_events.jsonl if proxy restarted or stats were reset
+  if (saved < 0 || before < 0 || reqs < 0) {
+    const disk = readEventsSinceFn(baseline.startedAtIso);
+    saved = disk.tokensSaved;
+    before = disk.tokensBefore;
+    after = disk.tokensAfter;
+    cost = disk.costSavedUsd;
+    reqs = disk.totalRequests;
+  }
+
+  saved = Math.max(0, saved);
+  before = Math.max(0, before);
+  after = Math.max(0, after);
+  cost = Math.max(0, cost);
+  reqs = Math.max(0, reqs);
+
+  if (before > 0 && after === 0 && saved > 0) {
+    after = Math.max(0, before - saved);
+  }
+
+  const pct =
+    before > 0 ? Math.round((saved / before) * 1000) / 10 : 0;
+
+  return {
+    startedAt: baseline.startedAt,
+    startedAtIso: baseline.startedAtIso,
+    totalRequests: reqs,
+    tokensSaved: saved,
+    tokensBefore: before,
+    tokensAfter: after,
+    savingsPct: pct,
+    costSavedUsd: cost,
+  };
+}
+
 function mergeStats(
   stats: RawHeadroomStats | null,
-  disk: ReturnType<typeof readSavingsEvents>
+  disk: ReturnType<typeof readSavingsEvents>,
 ): {
   tokensSaved: number;
   tokensBefore: number;
@@ -126,8 +253,13 @@ function mergeStats(
     const tok = stats.tokens;
     const req = stats.requests;
 
-    const httpSaved = comp?.total_tokens_removed || tok?.saved || tok?.all_layers_saved || 0;
-    const httpBefore = comp?.total_tokens_before || tok?.total_before_compression || tok?.input || 0;
+    const httpSaved =
+      comp?.total_tokens_removed || tok?.saved || tok?.all_layers_saved || 0;
+    const httpBefore =
+      comp?.total_tokens_before ||
+      tok?.total_before_compression ||
+      tok?.input ||
+      0;
     const lifetimeSaved = stats.persistent_savings?.lifetime?.tokens_saved || 0;
 
     schemaTokensSaved = comp?.tool_schema_tokens_saved || 0;
@@ -147,7 +279,10 @@ function mergeStats(
     if (req?.total) {
       totalRequests = Math.max(totalRequests, req.total);
     }
-    if (stats.summary?.primary_model && stats.summary.primary_model !== "passthrough:models") {
+    if (
+      stats.summary?.primary_model &&
+      stats.summary.primary_model !== "passthrough:models"
+    ) {
       activeModel = stats.summary.primary_model;
     }
   }
@@ -174,7 +309,7 @@ function mergeStats(
 export async function getHeadroomMetrics(
   config: HeadroomStatusConfig,
   fetchFn: typeof fetch = fetch,
-  readDiskFn: typeof readSavingsEvents = readSavingsEvents
+  readDiskFn: typeof readSavingsEvents = readSavingsEvents,
 ): Promise<HeadroomMetrics> {
   const base = `http://${config.host}:${config.port}`;
   const now = Date.now();

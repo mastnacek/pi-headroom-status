@@ -8,6 +8,7 @@ import { saveConfig } from "./config.js";
 import { getHeadroomMetrics } from "./api.js";
 import {
   formatDetailedReport,
+  formatSessionReport,
   formatStatusline,
   ANSI_BOLD,
   ANSI_CYAN,
@@ -15,23 +16,30 @@ import {
   ANSI_DIM,
   ANSI_RESET,
 } from "./statusline.js";
-import type { HeadroomMetrics, HeadroomStatusConfig } from "./types.js";
+import type {
+  HeadroomMetrics,
+  HeadroomSessionMetrics,
+  HeadroomStatusConfig,
+} from "./types.js";
 
-const COMMAND_DOCS: Record<string, string> = {
+const COMMAND_DOCS = {
+  session: "show savings and token reduction for current session only",
   status: "display detailed headroom metrics and compression statistics",
   savings: "show token reduction and cost savings breakdown",
   dashboard: "open Headroom web dashboard in browser",
   refresh: "force immediate re-probe and update statusline",
+  scope: "switch statusline badge scope (session | lifetime)",
+  "reset-session": "reset current session baseline counter to now",
   on: "enable statusline badge display",
   off: "disable statusline badge display",
   format: "set statusline format (compact | normal | detailed)",
   port: "configure proxy port (default: 8787)",
   help: "display command reference and help banner",
-};
+} as const;
 
 export function buildHelpText(
   config: HeadroomStatusConfig,
-  metrics: HeadroomMetrics
+  metrics: HeadroomMetrics,
 ): string {
   const statusBadge = metrics.online
     ? `${ANSI_BOLD}${ANSI_GREEN}● Online${ANSI_RESET} (:${config.port})`
@@ -41,15 +49,22 @@ export function buildHelpText(
     ? `${ANSI_BOLD}${ANSI_GREEN}● Enabled${ANSI_RESET}`
     : `${ANSI_BOLD}${ANSI_DIM}○ Disabled${ANSI_RESET}`;
 
+  const sessionSaved = metrics.session?.tokensSaved ?? 0;
+  const sessionPct = (metrics.session?.savingsPct ?? 0).toFixed(1);
+  const sessionCost = (metrics.session?.costSavedUsd ?? 0).toFixed(2);
+
   return [
     `${ANSI_BOLD}${ANSI_CYAN}⚡ pi-headroom-status${ANSI_RESET} — Context Optimization Statusline Suite`,
     `Real-time Headroom proxy monitoring, token savings tracking, and statusline badge.`,
     ``,
     `${ANSI_BOLD}Commands & Subcommands:${ANSI_RESET}`,
+    `  /headroom session            — show savings and token reduction for current session`,
     `  /headroom status             — show full metrics, uptime, and compression report`,
     `  /headroom savings            — view detailed token savings & cost avoidance`,
     `  /headroom dashboard          — open web dashboard (http://${config.host}:${config.port}/dashboard)`,
     `  /headroom refresh            — force immediate stats probe & statusline update`,
+    `  /headroom scope <type>       — switch badge scope (session | lifetime)`,
+    `  /headroom reset-session      — reset session baseline counter to now`,
     `  /headroom on | off           — toggle statusline display (${enabledBadge})`,
     `  /headroom format <type>      — set badge format (compact | normal | detailed)`,
     `  /headroom port <number>      — set Headroom proxy port (current: ${config.port})`,
@@ -58,8 +73,9 @@ export function buildHelpText(
     `${ANSI_DIM}Tip: Append --global to any setting command to persist across all sessions.${ANSI_RESET}`,
     ``,
     `${ANSI_BOLD}Current Runtime Overview:${ANSI_RESET}`,
-    `  • Proxy: ${statusBadge} | Statusline: ${enabledBadge} | Format: ${ANSI_BOLD}${ANSI_CYAN}${config.format}${ANSI_RESET}`,
-    `  • Savings: ${ANSI_BOLD}${ANSI_GREEN}${metrics.savingsPct.toFixed(1)}%${ANSI_RESET} (${metrics.tokensSaved.toLocaleString()} tokens · $${metrics.costSavedUsd.toFixed(2)})`,
+    `  • Proxy: ${statusBadge} | Statusline: ${enabledBadge} | Scope: ${ANSI_BOLD}${ANSI_CYAN}${config.scope}${ANSI_RESET} | Format: ${ANSI_BOLD}${ANSI_CYAN}${config.format}${ANSI_RESET}`,
+    `  • Session Savings: ${ANSI_BOLD}${ANSI_GREEN}${sessionPct}%${ANSI_RESET} (${sessionSaved.toLocaleString()} tokens · $${sessionCost})`,
+    `  • Lifetime Savings: ${ANSI_BOLD}${ANSI_GREEN}${metrics.savingsPct.toFixed(1)}%${ANSI_RESET} (${metrics.tokensSaved.toLocaleString()} tokens · $${metrics.costSavedUsd.toFixed(2)})`,
   ].join("\n");
 }
 
@@ -78,10 +94,12 @@ export function openDashboard(host: string, port: number): void {
 export function registerHeadroomCommands(
   pi: ExtensionAPI,
   getState: () => { config: HeadroomStatusConfig; metrics: HeadroomMetrics },
-  updateState: (config: HeadroomStatusConfig, metrics: HeadroomMetrics) => void
+  updateState: (config: HeadroomStatusConfig, metrics: HeadroomMetrics) => void,
+  computeSession?: (lifetime: HeadroomMetrics) => HeadroomSessionMetrics | undefined,
+  resetSession?: (lifetime: HeadroomMetrics) => void,
 ): void {
   const getCompletions = async (
-    prefix: string
+    prefix: string,
   ): Promise<AutocompleteItem[] | null> => {
     const tokens = prefix.split(/\s+/).filter(Boolean);
     const trailingSpace = /\s$/.test(prefix);
@@ -93,22 +111,61 @@ export function registerHeadroomCommands(
 
       if (cmd === "format") {
         const formats = [
-          { value: "format compact", label: "format compact", description: "Minimal percentage badge" },
-          { value: "format normal", label: "format normal", description: "Standard percentage and token diff" },
-          { value: "format detailed", label: "format detailed", description: "Full badge with version & requests" },
+          {
+            value: "format compact",
+            label: "format compact",
+            description: "Minimal percentage badge",
+          },
+          {
+            value: "format normal",
+            label: "format normal",
+            description: "Standard percentage and token diff",
+          },
+          {
+            value: "format detailed",
+            label: "format detailed",
+            description: "Full badge with version & requests",
+          },
         ];
         const filtered = formats.filter((i) =>
-          i.value.toLowerCase().startsWith(normalizedPrefix)
+          i.value.toLowerCase().startsWith(normalizedPrefix),
         );
         return filtered.length > 0 ? filtered : null;
       }
 
-      if (["on", "off", "refresh", "dashboard", "status", "savings"].includes(cmd || "")) {
+      if (cmd === "scope") {
+        const scopes = [
+          {
+            value: "scope session",
+            label: "scope session",
+            description: "Show token savings for current Pi session",
+          },
+          {
+            value: "scope lifetime",
+            label: "scope lifetime",
+            description: "Show total lifetime proxy savings",
+          },
+        ];
+        const filtered = scopes.filter((i) =>
+          i.value.toLowerCase().startsWith(normalizedPrefix),
+        );
+        return filtered.length > 0 ? filtered : null;
+      }
+
+      if (
+        ["on", "off", "refresh", "dashboard", "status", "savings", "session", "reset-session"].includes(
+          cmd || "",
+        )
+      ) {
         const flags = [
-          { value: `${cmd} --global`, label: `${cmd} --global`, description: "Apply setting globally" },
+          {
+            value: `${cmd} --global`,
+            label: `${cmd} --global`,
+            description: "Apply setting globally",
+          },
         ];
         const filtered = flags.filter((i) =>
-          i.value.toLowerCase().startsWith(normalizedPrefix)
+          i.value.toLowerCase().startsWith(normalizedPrefix),
         );
         return filtered.length > 0 ? filtered : null;
       }
@@ -130,7 +187,7 @@ export function registerHeadroomCommands(
 
   const commandHandler = async (
     args: string,
-    ctx: ExtensionCommandContext
+    ctx: ExtensionCommandContext,
   ): Promise<void> => {
     const trimmed = args.trim();
     const tokens = trimmed.split(/\s+/).filter(Boolean);
@@ -145,15 +202,37 @@ export function registerHeadroomCommands(
     // Help banner (default on empty or help)
     if (!subcommand || ["help", "-h", "--help"].includes(subcommand)) {
       metrics = await getHeadroomMetrics(config);
+      if (computeSession) metrics.session = computeSession(metrics);
       updateState(config, metrics);
       ctx.ui.notify(buildHelpText(config, metrics), "info");
       return;
     }
 
     switch (subcommand) {
+      case "session": {
+        metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
+        updateState(config, metrics);
+        ctx.ui.notify(formatSessionReport(metrics, config), "info");
+        break;
+      }
+
+      case "reset-session": {
+        metrics = await getHeadroomMetrics(config);
+        if (resetSession) resetSession(metrics);
+        if (computeSession) metrics.session = computeSession(metrics);
+        updateState(config, metrics);
+        if (ctx.hasUI) {
+          ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
+        }
+        ctx.ui.notify("⚡ Headroom session baseline reset to current moment.", "info");
+        break;
+      }
+
       case "status":
       case "savings": {
         metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
         updateState(config, metrics);
         ctx.ui.notify(formatDetailedReport(metrics, config), "info");
         break;
@@ -163,20 +242,49 @@ export function registerHeadroomCommands(
         openDashboard(config.host, config.port);
         ctx.ui.notify(
           `Opening Headroom dashboard at http://${config.host}:${config.port}/dashboard ...`,
-          "info"
+          "info",
         );
         break;
       }
 
       case "refresh": {
         metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
+        updateState(config, metrics);
+        if (ctx.hasUI) {
+          ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
+        }
+        const activePct = config.scope === "session" && metrics.session
+          ? metrics.session.savingsPct
+          : metrics.savingsPct;
+        const activeTokens = config.scope === "session" && metrics.session
+          ? metrics.session.tokensSaved
+          : metrics.tokensSaved;
+        ctx.ui.notify(
+          `⚡ Headroom stats refreshed: ${activePct.toFixed(1)}% savings (${activeTokens.toLocaleString()} tokens saved)`,
+          "info",
+        );
+        break;
+      }
+
+      case "scope": {
+        if (value !== "session" && value !== "lifetime") {
+          ctx.ui.notify(
+            `Invalid scope "${value}". Choose: session | lifetime`,
+            "warning",
+          );
+          return;
+        }
+        config = saveConfig(ctx.cwd, { scope: value }, isGlobal);
+        metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
         updateState(config, metrics);
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
         ctx.ui.notify(
-          `⚡ Headroom stats refreshed: ${metrics.savingsPct.toFixed(1)}% savings (${metrics.tokensSaved.toLocaleString()} tokens saved)`,
-          "info"
+          `⚡ Headroom statusline scope set to "${value}"${isGlobal ? " (globally)" : ""}.`,
+          "info",
         );
         break;
       }
@@ -184,11 +292,15 @@ export function registerHeadroomCommands(
       case "on": {
         config = saveConfig(ctx.cwd, { enabled: true }, isGlobal);
         metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
         updateState(config, metrics);
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
-        ctx.ui.notify(`⚡ Headroom statusline enabled${isGlobal ? " (globally)" : ""}.`, "info");
+        ctx.ui.notify(
+          `⚡ Headroom statusline enabled${isGlobal ? " (globally)" : ""}.`,
+          "info",
+        );
         break;
       }
 
@@ -198,7 +310,10 @@ export function registerHeadroomCommands(
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", "");
         }
-        ctx.ui.notify(`⚡ Headroom statusline disabled${isGlobal ? " (globally)" : ""}.`, "info");
+        ctx.ui.notify(
+          `⚡ Headroom statusline disabled${isGlobal ? " (globally)" : ""}.`,
+          "info",
+        );
         break;
       }
 
@@ -206,43 +321,51 @@ export function registerHeadroomCommands(
         if (value !== "compact" && value !== "normal" && value !== "detailed") {
           ctx.ui.notify(
             `Invalid format "${value}". Choose: compact | normal | detailed`,
-            "warning"
+            "warning",
           );
           return;
         }
-        config = saveConfig(
-          ctx.cwd,
-          { format: value },
-          isGlobal
-        );
+        config = saveConfig(ctx.cwd, { format: value }, isGlobal);
+        metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
         updateState(config, metrics);
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
-        ctx.ui.notify(`Format set to "${value}"${isGlobal ? " (globally)" : ""}.`, "info");
+        ctx.ui.notify(
+          `Format set to "${value}"${isGlobal ? " (globally)" : ""}.`,
+          "info",
+        );
         break;
       }
 
       case "port": {
         const portNum = parseInt(value, 10);
         if (Number.isNaN(portNum) || portNum <= 0 || portNum > 65535) {
-          ctx.ui.notify(`Invalid port "${value}". Must be a number between 1 and 65535.`, "warning");
+          ctx.ui.notify(
+            `Invalid port "${value}". Must be a number between 1 and 65535.`,
+            "warning",
+          );
           return;
         }
         config = saveConfig(ctx.cwd, { port: portNum }, isGlobal);
         metrics = await getHeadroomMetrics(config);
+        if (computeSession) metrics.session = computeSession(metrics);
         updateState(config, metrics);
         if (ctx.hasUI) {
           ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
         }
-        ctx.ui.notify(`Headroom port set to ${portNum}${isGlobal ? " (globally)" : ""}.`, "info");
+        ctx.ui.notify(
+          `Headroom port set to ${portNum}${isGlobal ? " (globally)" : ""}.`,
+          "info",
+        );
         break;
       }
 
       default:
         ctx.ui.notify(
           `Unknown subcommand "${subcommand}". Use: /headroom help`,
-          "warning"
+          "warning",
         );
         break;
     }

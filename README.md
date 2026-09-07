@@ -10,11 +10,12 @@ Real-time [Headroom](https://github.com/headroom-ai/headroom) context-compressio
 
 ## Features
 
-- **Live Statusline Badge:** Displays active token reduction percentage, tokens saved, and avoided cost in Pi's status bar.
+- **Live Statusline Badge:** Displays active token reduction percentage, tokens saved, and avoided cost in Pi's status bar. Supports both session-scoped and lifetime metrics.
+- **Session-Level Savings Tracking:** Automatically captures baseline on session start and tracks exact tokens saved and dollars avoided for the active Pi session with automatic disk fallback.
 - **Dynamic Background Polling:** Auto-refreshes metrics periodically (default 10s) and on conversation turn boundaries (`turn_end`, `agent_settled`).
 - **Resilient Multi-Tier Telemetry:** Queries local Headroom proxy HTTP APIs (`/health`, `/stats`) with automatic disk fallback (`~/.headroom/savings_events.jsonl`).
-- **Comprehensive Slash Command Suite:** `/headroom` with dynamic autocompletions for inspecting status, opening the web dashboard, changing formats, or toggling display.
-- **Custom Agent Tool:** `headroom_status` tool allowing the LLM agent to inspect context compression efficiency and token savings on demand.
+- **Comprehensive Slash Command Suite:** `/headroom` with dynamic autocompletions for session reports, switching scopes, opening the web dashboard, changing formats, or resetting baselines.
+- **Custom Agent Tool:** `headroom_status` tool allowing the LLM agent to inspect context compression efficiency and token savings on demand (with `session`, `lifetime`, or `both` scopes).
 - **Multi-Level Configuration:** Supports session, project (`.pi/headroom-status.json`), and global (`~/.pi/agent/headroom-status.json`) configurations.
 
 ---
@@ -47,8 +48,11 @@ Add to `~/.pi/agent/settings.json`:
 
 | Command | Description |
 | :--- | :--- |
-| `/headroom status` | Displays full proxy status, version, uptime, and detailed token breakdown |
+| `/headroom session` | Displays token savings, compression ratio, and cost avoided for the current session |
+| `/headroom status` | Displays full proxy status, session metrics, and lifetime token breakdown |
 | `/headroom savings` | Shows token savings breakdown (schemas vs messages) and cost avoidance |
+| `/headroom scope <session\|lifetime>` | Switches statusline badge scope between current session and lifetime |
+| `/headroom reset-session` | Resets current session baseline counter to now |
 | `/headroom dashboard` | Opens Headroom's web dashboard (`http://localhost:8787/dashboard`) in default browser |
 | `/headroom refresh` | Forces immediate HTTP probe and updates the statusline badge |
 | `/headroom on` \| `off` | Enables or disables the statusline badge (append `--global` for persistence) |
@@ -91,6 +95,7 @@ Stored under `.pi/headroom-status.json` or `~/.pi/agent/headroom-status.json`:
   "port": 8787,
   "pollIntervalMs": 10000,
   "format": "normal",
+  "scope": "session",
   "showDollars": true,
   "showTokens": true,
   "showOffline": true,
@@ -105,6 +110,7 @@ Stored under `.pi/headroom-status.json` or `~/.pi/agent/headroom-status.json`:
 The plugin registers `headroom_status`:
 
 - `refresh?: boolean` — Trigger immediate proxy probe
+- `scope?: "session" | "lifetime" | "both"` — Filter metrics scope (default: `"both"`)
 - `detailed?: boolean` — Return formatted markdown breakdown
 
 ---

@@ -9,6 +9,8 @@ export interface HeadroomStatusConfig {
   pollIntervalMs: number;
   /** Display format: compact | normal | detailed */
   format: "compact" | "normal" | "detailed";
+  /** Statusline metrics scope: session | lifetime (default: session) */
+  scope: "session" | "lifetime";
   /** Include estimated USD savings in statusline */
   showDollars: boolean;
   /** Include token savings in statusline */
@@ -17,6 +19,27 @@ export interface HeadroomStatusConfig {
   showOffline: boolean;
   /** Icon/prefix before statusline text (default: ⚡) */
   prefix: string;
+}
+
+export interface HeadroomSessionBaseline {
+  startedAt: number;
+  startedAtIso: string;
+  tokensSaved: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  costSavedUsd: number;
+  totalRequests: number;
+}
+
+export interface HeadroomSessionMetrics {
+  startedAt: number;
+  startedAtIso: string;
+  totalRequests: number;
+  tokensSaved: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  savingsPct: number;
+  costSavedUsd: number;
 }
 
 export interface HeadroomHealthResponse {
@@ -56,4 +79,5 @@ export interface HeadroomMetrics {
   source: "http" | "events" | "offline";
   lastChecked: number;
   error?: string;
+  session?: HeadroomSessionMetrics;
 }

@@ -4,13 +4,26 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./src/config.js";
-import { getHeadroomMetrics } from "./src/api.js";
-import { formatDetailedReport, formatStatusline } from "./src/statusline.js";
+import {
+  calculateSessionMetrics,
+  createSessionBaseline,
+  getHeadroomMetrics,
+} from "./src/api.js";
+import {
+  formatDetailedReport,
+  formatSessionReport,
+  formatStatusline,
+} from "./src/statusline.js";
 import { registerHeadroomCommands } from "./src/commands.js";
-import type { HeadroomMetrics, HeadroomStatusConfig } from "./src/types.js";
+import type {
+  HeadroomMetrics,
+  HeadroomSessionBaseline,
+  HeadroomStatusConfig,
+} from "./src/types.js";
 
 export default function headroomStatusExtension(pi: ExtensionAPI): void {
   let config: HeadroomStatusConfig = loadConfig(process.cwd());
+  let sessionBaseline: HeadroomSessionBaseline | null = null;
   let metrics: HeadroomMetrics = {
     online: false,
     totalRequests: 0,
@@ -27,9 +40,26 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  function computeSession(m: HeadroomMetrics) {
+    if (!sessionBaseline) return undefined;
+    return calculateSessionMetrics(m, sessionBaseline);
+  }
+
+  function resetSession(m: HeadroomMetrics) {
+    sessionBaseline = createSessionBaseline(m);
+    try {
+      pi.appendEntry("headroom-session-baseline", sessionBaseline);
+    } catch {
+      // Non-fatal append error
+    }
+  }
+
   async function refresh(ctx?: ExtensionContext): Promise<void> {
     try {
       metrics = await getHeadroomMetrics(config);
+      if (sessionBaseline) {
+        metrics.session = calculateSessionMetrics(metrics, sessionBaseline);
+      }
       if (ctx?.hasUI) {
         ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
       }
@@ -57,7 +87,42 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
   // 1. Session Lifecycle
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     config = loadConfig(ctx.cwd || process.cwd());
-    await refresh(ctx);
+
+    // Restore or initialize session baseline
+    let restoredBaseline: HeadroomSessionBaseline | null = null;
+    if (ctx.sessionManager?.getEntries) {
+      try {
+        for (const entry of ctx.sessionManager.getEntries()) {
+          if (
+            entry.type === "custom" &&
+            entry.customType === "headroom-session-baseline"
+          ) {
+            const data = entry.data as HeadroomSessionBaseline;
+            if (data && Number.isFinite(data.startedAt)) {
+              restoredBaseline = data;
+            }
+          }
+        }
+      } catch {
+        // Non-fatal read error
+      }
+    }
+
+    metrics = await getHeadroomMetrics(config);
+
+    if (restoredBaseline) {
+      sessionBaseline = restoredBaseline;
+    } else {
+      resetSession(metrics);
+    }
+
+    if (sessionBaseline) {
+      metrics.session = calculateSessionMetrics(metrics, sessionBaseline);
+    }
+
+    if (ctx.hasUI) {
+      ctx.ui.setStatus("headroom", formatStatusline(metrics, config));
+    }
     startPolling(ctx);
   });
 
@@ -80,7 +145,9 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
     (newConfig, newMetrics) => {
       config = newConfig;
       metrics = newMetrics;
-    }
+    },
+    computeSession,
+    resetSession,
   );
 
   // 3. Register Custom Agent Tool
@@ -88,42 +155,88 @@ export default function headroomStatusExtension(pi: ExtensionAPI): void {
     name: "headroom_status",
     label: "Headroom Status",
     description:
-      "Inspect real-time Headroom context-compression metrics, token savings, cost avoided, and proxy status.",
-    promptSnippet: "Check Headroom context optimization stats and token savings",
+      "Inspect real-time Headroom context-compression metrics, token savings, cost avoided, and proxy status for session and lifetime.",
+    promptSnippet:
+      "Check Headroom context optimization stats and token savings",
     parameters: Type.Object({
       refresh: Type.Optional(
         Type.Boolean({
           description: "Force immediate re-probe against Headroom proxy",
-        })
+        }),
+      ),
+      scope: Type.Optional(
+        Type.Union([
+          Type.Literal("session"),
+          Type.Literal("lifetime"),
+          Type.Literal("both"),
+        ], {
+          description: "Scope of metrics to return: session | lifetime | both (default: both)",
+        }),
       ),
       detailed: Type.Optional(
         Type.Boolean({
-          description: "Return full markdown breakdown instead of summary object",
-        })
+          description:
+            "Return full markdown breakdown instead of summary text",
+        }),
       ),
     }),
     async execute(_toolCallId, params) {
       if (params.refresh) {
         metrics = await getHeadroomMetrics(config);
+        if (sessionBaseline) {
+          metrics.session = calculateSessionMetrics(metrics, sessionBaseline);
+        }
       }
 
       if (params.detailed) {
+        const text = params.scope === "session"
+          ? formatSessionReport(metrics, config)
+          : formatDetailedReport(metrics, config);
         return {
           content: [
             {
               type: "text",
-              text: formatDetailedReport(metrics, config),
+              text,
             },
           ],
           details: metrics,
         };
       }
 
+      if (params.scope === "session" && metrics.session) {
+        const s = metrics.session;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Headroom [Session]: ${metrics.online ? "Online" : "Offline"} | Savings: ${s.savingsPct.toFixed(1)}% (${s.tokensSaved.toLocaleString()} tokens saved / $${s.costSavedUsd.toFixed(2)}) across ${s.totalRequests} reqs`,
+            },
+          ],
+          details: metrics,
+        };
+      }
+
+      if (params.scope === "lifetime") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Headroom [Lifetime]: ${metrics.online ? "Online" : "Offline"} | Savings: ${metrics.savingsPct.toFixed(1)}% (${metrics.tokensSaved.toLocaleString()} tokens saved / $${metrics.costSavedUsd.toFixed(2)}) across ${metrics.totalRequests} reqs`,
+            },
+          ],
+          details: metrics,
+        };
+      }
+
+      const sessionStr = metrics.session
+        ? `Session: ${metrics.session.savingsPct.toFixed(1)}% (-${metrics.session.tokensSaved.toLocaleString()} tok · $${metrics.session.costSavedUsd.toFixed(2)}) | `
+        : "";
+
       return {
         content: [
           {
             type: "text",
-            text: `Headroom: ${metrics.online ? "Online" : "Offline"} | Savings: ${metrics.savingsPct.toFixed(1)}% (${metrics.tokensSaved.toLocaleString()} tokens saved / $${metrics.costSavedUsd.toFixed(2)})`,
+            text: `Headroom: ${metrics.online ? "Online" : "Offline"} | ${sessionStr}Lifetime: ${metrics.savingsPct.toFixed(1)}% (-${metrics.tokensSaved.toLocaleString()} tok · $${metrics.costSavedUsd.toFixed(2)})`,
           },
         ],
         details: metrics,

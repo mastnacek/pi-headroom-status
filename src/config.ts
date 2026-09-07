@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { HeadroomStatusConfig } from "./types.js";
@@ -9,13 +15,19 @@ export const DEFAULT_CONFIG: HeadroomStatusConfig = {
   port: 8787,
   pollIntervalMs: 10000,
   format: "normal",
+  scope: "session",
   showDollars: true,
   showTokens: true,
   showOffline: true,
   prefix: "⚡",
 };
 
-export const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", "headroom-status.json");
+export const GLOBAL_CONFIG_PATH = join(
+  homedir(),
+  ".pi",
+  "agent",
+  "headroom-status.json",
+);
 
 export function getProjectConfigPath(cwd: string): string {
   return resolve(cwd, ".pi", "headroom-status.json");
@@ -56,7 +68,7 @@ export function loadConfig(cwd: string): HeadroomStatusConfig {
 export function saveConfig(
   cwd: string,
   updates: Partial<HeadroomStatusConfig>,
-  isGlobal = false
+  isGlobal = false,
 ): HeadroomStatusConfig {
   const current = loadConfig(cwd);
   const next = { ...current, ...updates };
@@ -72,7 +84,11 @@ export function saveConfig(
       writeFileSync(targetPath, JSON.stringify(next, null, 2), "utf8");
     }
   } catch (err) {
-    console.error("[pi-headroom-status] Failed to save config:", targetPath, err);
+    console.error(
+      "[pi-headroom-status] Failed to save config:",
+      targetPath,
+      err,
+    );
   }
 
   return next;
