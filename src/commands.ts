@@ -184,10 +184,15 @@ export function registerHeadroomCommands(
 
     // 1st Token Completion (Subcommands from Dictionary)
     const typed = (tokens[0] ?? "").toLowerCase();
+    const NON_TERMINAL = new Set(["format", "scope"]);
     const items: AutocompleteItem[] = [];
     for (const [value, description] of Object.entries(COMMAND_DOCS)) {
       if (value.toLowerCase().startsWith(typed)) {
-        items.push({ value, label: value, description });
+        items.push({
+          value: NON_TERMINAL.has(value) ? `${value} ` : value,
+          label: value,
+          description,
+        });
       }
     }
 
